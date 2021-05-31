@@ -191,6 +191,19 @@ get_pid(void) {
     return last_pid;
 }
 
+/*   **ATTENTION**
+ How does get_pid do?
+ next_safe and last_pid are static ,and was inititalized to MAX_PID(2*MAX_PROCESS);
+ then we set last_pid to 1 (means we will check the id from 1 to MAX_PID
+ then check the process list, if proc->pid==last_pid (means we can't use this process id), plus the last_pid by 1
+ if last_pid==MAX_PID, means we have already check the list for one turn, then set it to 1, restart the check
+ then finally we have got a unused id (last_pid), to the else part.
+ If proc->pid>last_pid(definetly) and naxt_safe>proc->pid, we set next_safe=proc->pid
+ in the last, the area (next_safe,MAX_PID) are all useable
+ return last_pid.
+*/
+
+
 // proc_run - make process "proc" running on cpu
 // NOTE: before call switch_to, should load  base addr of "proc"'s new PDT
 void
@@ -208,6 +221,8 @@ proc_run(struct proc_struct *proc) {
         }
         local_intr_restore(intr_flag);   //if intr_flag=1, enable the interruption
     }
+//shut down the intrruption, so that there is no another process during we are changing the current process.
+
 }
 
 // forkret -- the first kernel entry point of a new thread/process
@@ -216,7 +231,7 @@ proc_run(struct proc_struct *proc) {
 static void
 forkret(void) {
     forkrets(current->tf);
-}
+} //WATCH MORE!!!!
 
 // hash_proc - add proc into proc hash_list
 static void
@@ -229,7 +244,7 @@ struct proc_struct *
 find_proc(int pid) {
     if (0 < pid && pid < MAX_PID) {
         list_entry_t *list = hash_list + pid_hashfn(pid), *le = list;  //hash_list+pid_hashfn try to find the process quicker(there is a possiblity
-        //that a process in the hash map has been replaced
+        //A list-hashmap
         while ((le = list_next(le)) != list) {
             struct proc_struct *proc = le2proc(le, hash_link);
             if (proc->pid == pid) {
@@ -247,10 +262,10 @@ int
 kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags) {   //fn is a function pointer and arg is the context 
     struct trapframe tf;
     memset(&tf, 0, sizeof(struct trapframe));
-    tf.tf_cs = KERNEL_CS;   //code
-    tf.tf_ds = tf.tf_es = tf.tf_ss = KERNEL_DS;  //data
-    tf.tf_regs.reg_ebx = (uint32_t)fn;   //
-    tf.tf_regs.reg_edx = (uint32_t)arg;  
+    tf.tf_cs = KERNEL_CS;   //code segment of kernel
+    tf.tf_ds = tf.tf_es = tf.tf_ss = KERNEL_DS;  //data segment of kernel
+    tf.tf_regs.reg_ebx = (uint32_t)fn;   //the function to be 
+    tf.tf_regs.reg_edx = (uint32_t)arg;   //arg of the func
     tf.tf_eip = (uint32_t)kernel_thread_entry;  //to be returned??
 /* 
 kernel_thread_entry:        # void kernel_thread(void)
@@ -265,6 +280,8 @@ kernel_thread_entry:        # void kernel_thread(void)
 
     return do_fork(clone_flags | CLONE_VM, 0, &tf);
     //to be written
+    //#define CLONE_VM            0x00000100  // set if VM shared between processes
+    //#define CLONE_THREAD        0x00000200  // thread group
 }
 
 // setup_kstack - alloc pages with size KSTACKPAGE as process kernel stack
@@ -282,7 +299,8 @@ setup_kstack(struct proc_struct *proc) {
 static void
 put_kstack(struct proc_struct *proc) {
     free_pages(kva2page((void *)(proc->kstack)), KSTACKPAGE);
-}    //clear the space  (that we can apply new space for the stack? 
+}    //clear the space  (that we can apply new space for the stack?  
+//or clear the stack
 
 // copy_mm - process "proc" duplicate OR share process "current"'s mm according clone_flags
 //         - if clone_flags & CLONE_VM, then "share" ; else "duplicate"
@@ -299,11 +317,11 @@ static void
 copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
     proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;  //setup a new space on the top of the proc->kstack
     *(proc->tf) = *tf;
-    proc->tf->tf_regs.reg_eax = 0;  //returning value (of forkrets???)
+    proc->tf->tf_regs.reg_eax = 0;  //returning value (of do fork???)
     proc->tf->tf_esp = esp;  //set the stack pointer(top of the stack)
     proc->tf->tf_eflags |= FL_IF;  //interrupt  could respond/respondable
 
-    proc->context.eip = (uintptr_t)forkret;   //the next command when intrrupt happens
+    proc->context.eip = (uintptr_t)forkret;   //the next command when intrrupt happens, the we jump back and execute this function
     proc->context.esp = (uintptr_t)(proc->tf);  //the stack ...  esp is tf!!
     
 }
@@ -324,14 +342,15 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //**ATTENTION!!!!!!**
     // it is current who called this function to create the child process
     //parents!!1
-    
     proc=alloc_proc();
     if(proc==NULL)
     {
         goto fork_out;
     }
-    proc->parent=current;
 
+    proc->parent=current;
+    proc=alloc_proc();
+    
     if(setup_kstack(proc)!=0)  //no enough space to set a kstack-->clean a new space
     {
         goto bad_fork_cleanup_kstack;
@@ -348,7 +367,7 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     local_intr_save(intr_flag); 
     {
         proc->pid=get_pid(); //get a id for this process
-        list_add(&proc_list,&(proc->list_link));
+        list_add(&proc_list,&proc->list_link);
         hash_proc(proc);
         nr_process+=1;
     }
